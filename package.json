@@ -1,0 +1,33 @@
+{
+  "name": "opencode-v2-cliproxy-quota",
+  "version": "0.1.0",
+  "description": "OpenCode 2 CLI plugin that shows CLIProxyAPI 5-hour and weekly quota usage in the prompt footer and sidebar",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.ts",
+    "./server": "./index.ts",
+    "./tui": "./tui.tsx"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.24"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.14",
+    "@opentui/solid": ">=0.5.14",
+    "solid-js": ">=1.9.0"
+  },
+  "devDependencies": {
+    "@opencode/theme": "2.0.24",
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
+    "@types/bun": "latest",
+    "@typescript/native-preview": "^7.0.0-dev",
+    "solid-js": "1.9.15"
+  },
+  "license": "MIT"
+}

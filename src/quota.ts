@@ -57,25 +57,16 @@ const PROBES: Record<
     call: (file) => {
       const token = isRecord(file.id_token) ? file.id_token : {}
       const account = text(token.chatgpt_account_id) || text(file.chatgpt_account_id)
-      return {
-        method: "GET",
-        url: "https://chatgpt.com/backend-api/wham/usage",
-        header: {
-          Authorization: "Bearer $TOKEN$",
-          "Content-Type": "application/json",
-          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)",
-          ...(account ? { "Chatgpt-Account-Id": account } : {}),
-        },
-      }
+      return codexUsageCall(account)
     },
     parse: (body) => {
       const limit = isRecord(body) && isRecord(body.rate_limit) ? body.rate_limit : {}
-      const windows = [limit.primary_window, limit.secondary_window].flatMap((item): Window[] => {
+      const windows = [limit.primary_window, limit.secondary_window].flatMap((item, index): Window[] => {
         if (!isRecord(item)) return []
         const used = number(scalar(item.used_percent))
         if (used === undefined) return []
         const seconds = number(scalar(item.limit_window_seconds))
-        return [{ kind: codexKind(seconds === undefined ? undefined : seconds / 60, 0), usedPercent: used, resetAt: unixSeconds(scalar(item.reset_at)) }]
+        return [{ kind: codexKind(seconds === undefined ? undefined : seconds / 60, index), usedPercent: used, resetAt: unixSeconds(scalar(item.reset_at)) }]
       })
       return windows.length === 0 ? [] : [{ provider: "codex", windows }]
     },
@@ -205,6 +196,19 @@ export function parseProbe(provider: string, body: unknown) {
   return PROBES[provider]?.parse(body) ?? []
 }
 
+export function codexUsageCall(account?: string): Omit<ApiCall, "auth_index"> {
+  return {
+    method: "GET",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    header: {
+      Authorization: "Bearer $TOKEN$",
+      "Content-Type": "application/json",
+      "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)",
+      ...(account ? { "Chatgpt-Account-Id": account } : {}),
+    },
+  }
+}
+
 export function providerForModel(modelID: string) {
   const id = modelID.toLowerCase().replace(/^cpa-/, "")
   const prefix = id.split("/")[0]
@@ -223,6 +227,15 @@ export function isProxyProvider(
   const target = new URL(baseURL)
   const proxy = new URL(proxyURL)
   return target.port === proxy.port && loopback(target.hostname) === loopback(proxy.hostname)
+}
+
+export function quotaSource(
+  provider: { readonly id: string; readonly settings?: Readonly<Record<string, unknown>> },
+  settings: { readonly baseURL: string; readonly providers: readonly string[] },
+) {
+  if (isProxyProvider(provider, settings.baseURL, settings.providers)) return "proxy"
+  if (provider.id === "openai") return "openai"
+  return undefined
 }
 
 export function summarize(accounts: readonly Account[], provider: string) {

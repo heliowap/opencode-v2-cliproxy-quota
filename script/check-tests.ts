@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "..")
-const modules = ["src/quota.ts", "src/client.ts"]
+const modules = ["src/quota.ts", "src/client.ts", "src/openai.ts", "src/rpc.ts"]
 
 const stubs = await Promise.all(
   modules.map(async (file) => {

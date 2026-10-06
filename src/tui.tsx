@@ -2,8 +2,9 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, createSignal, For, Show } from "solid-js"
-import { fetchAccounts, resolveSettings, type ProbeMemory } from "./client.ts"
-import { bar, footerText, formatReset, isProxyProvider, level, providerForModel, windowsForModel, type Account, type Window } from "./quota.ts"
+import { fetchAccounts, resolveSettings, type FetchResult, type ProbeMemory } from "./client.ts"
+import { bar, footerText, formatReset, level, providerForModel, quotaSource, windowsForModel, type Account, type Window } from "./quota.ts"
+import { QuotaRpc } from "./rpc.ts"
 
 const LABEL = { "5h": "5h", day: "day", week: "week", fable: "fable" } as const
 
@@ -11,25 +12,52 @@ export default Plugin.define({
   id: "cliproxy.quota",
   setup(context) {
     const settings = resolveSettings(context.options, process.env)
-    const [accounts, setAccounts] = createSignal<Account[]>([])
-    const [error, setError] = createSignal<string>()
+    const rpc = context.client.rpc(QuotaRpc)
+    const [proxyAccounts, setProxyAccounts] = createSignal<Account[]>([])
+    const [proxyError, setProxyError] = createSignal<string>()
+    const [openai, setOpenAI] = createSignal<FetchResult>({ ok: true, accounts: [] })
     const [now, setNow] = createSignal(Date.now())
     const memory: ProbeMemory = new Map()
+    let revision = 0
 
     const refresh = async () => {
-      const result = await fetchAccounts(settings, Date.now(), memory)
+      const current = ++revision
+      await Promise.all([
+        fetchAccounts(settings, Date.now(), memory).then((result) => {
+          if (!result.ok) return setProxyError(result.error)
+          setProxyError(undefined)
+          setProxyAccounts(result.accounts)
+        }),
+        rpc.openai({}, { location: context.location })
+          .catch(() => ({ ok: false, error: "Unable to read OpenAI quota from the OpenCode server" }))
+          .then((result) => {
+            if (current !== revision) return
+            setOpenAI(result as FetchResult)
+          }),
+      ])
       setNow(Date.now())
-      if (!result.ok) return setError(result.error)
-      setError(undefined)
-      setAccounts(result.accounts)
     }
 
-    const provider = createMemo(() => {
+    const source = createMemo(() => {
       const model = context.ui.model.current()
       if (!model) return undefined
       const info = context.data.location.provider.list(context.location)?.find((item) => item.id === model.providerID)
-      if (!isProxyProvider(info ?? { id: model.providerID }, settings.baseURL, settings.providers)) return undefined
-      return providerForModel(model.modelID)
+      return quotaSource(info ?? { id: model.providerID }, settings)
+    })
+    const accounts = createMemo(() => {
+      if (source() !== "openai") return proxyAccounts()
+      const current = openai()
+      return current.ok ? current.accounts : []
+    })
+    const error = createMemo(() => {
+      if (source() !== "openai") return proxyError()
+      const current = openai()
+      return current.ok ? undefined : current.error
+    })
+    const provider = createMemo(() => {
+      const model = context.ui.model.current()
+      if (source() === "openai") return accounts().length > 0 || error() ? "codex" : undefined
+      return source() && model ? providerForModel(model.modelID) : undefined
     })
     const windows = createMemo(() => {
       const model = context.ui.model.current()
@@ -76,8 +104,8 @@ export default Plugin.define({
       commands: [
         {
           id: "cliproxy.quota.refresh",
-          title: "Refresh CLIProxyAPI quota",
-          group: "CLIProxyAPI",
+          title: "Refresh quota",
+          group: "Quota",
           palette: true,
           slash: { name: "quota" },
           run: async () => {
@@ -93,9 +121,16 @@ export default Plugin.define({
     void refresh()
     const timer = setInterval(() => void refresh(), settings.intervalMs)
     const stop = context.data.on("session.execution.succeeded", () => void refresh())
+    const stopCredential = context.data.on("credential.switched", (event) => {
+      if (event.data.integrationID !== "openai") return
+      setOpenAI({ ok: true, accounts: [] })
+      void refresh()
+    })
     return () => {
+      revision++
       clearInterval(timer)
       stop()
+      stopCredential()
     }
   },
 })

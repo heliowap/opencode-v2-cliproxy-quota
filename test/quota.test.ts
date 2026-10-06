@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { bar, footerText, formatReset, isProxyProvider, level, parseCredentials, parseProbe, probeTargets, providerForModel, summarize, windowsForModel } from "../src/quota.ts"
+import { bar, footerText, formatReset, isProxyProvider, level, parseCredentials, parseProbe, probeTargets, providerForModel, quotaSource, summarize, windowsForModel } from "../src/quota.ts"
 
 const now = 1791288000_000
 
@@ -331,6 +331,17 @@ describe("isProxyProvider", () => {
   })
 })
 
+describe("quotaSource", () => {
+  test("separates the native OpenAI provider from proxy accounts and unrelated providers", () => {
+    const settings = { baseURL: "http://127.0.0.1:8317", providers: [] }
+    expect(quotaSource({ id: "openai", settings: { baseURL: "https://chatgpt.com/backend-api/codex" } }, settings)).toBe("openai")
+    expect(quotaSource({ id: "cli_proxy_openai", settings: { baseURL: "http://localhost:8317/v1" } }, settings)).toBe("proxy")
+    expect(quotaSource({ id: "openai", settings: { baseURL: "http://localhost:8317/v1" } }, settings)).toBe("proxy")
+    expect(quotaSource({ id: "openai" }, { ...settings, providers: ["openai"] })).toBe("proxy")
+    expect(quotaSource({ id: "anthropic" }, settings)).toBeUndefined()
+  })
+})
+
 describe("probeTargets", () => {
   const target = (item: ReturnType<typeof probeTargets>[number]) => ({
     provider: item.provider,
@@ -414,6 +425,18 @@ describe("parseProbe", () => {
         rate_limit: { primary_window: { used_percent: 26, limit_window_seconds: 604800, reset_at: 1791589256 }, secondary_window: null },
       }),
     ).toEqual([{ provider: "codex", windows: [{ kind: "week", usedPercent: 26, resetAt: 1791589256_000 }] }])
+  })
+
+  test("defaults missing Codex window lengths to five hours and weekly", () => {
+    expect(parseProbe("codex", {
+      rate_limit: { primary_window: { used_percent: 42 }, secondary_window: { used_percent: 86 } },
+    })).toEqual([{
+      provider: "codex",
+      windows: [
+        { kind: "5h", usedPercent: 42, resetAt: undefined },
+        { kind: "week", usedPercent: 86, resetAt: undefined },
+      ],
+    }])
   })
 
   test("reads the Devin daily and weekly windows", () => {

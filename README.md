@@ -98,6 +98,8 @@ bun test
 bun run typecheck
 ```
 
+`bun test` reports coverage and fails below 95% of lines or functions. CI runs the tests and the type check in parallel on every push and pull request.
+
 `script/fake-proxy.ts` serves fake recorded quota signals on port 18317 with the key `test-key`, for testing the UI without a real proxy:
 
 ```sh

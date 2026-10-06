@@ -10,6 +10,12 @@ const server = Bun.serve({
     const url = new URL(request.url)
     seen.push({ path: url.pathname, key: request.headers.get("x-management-key") })
     if (request.headers.get("x-management-key") !== "secret") return Response.json({ error: "invalid management key" }, { status: 401 })
+    if (url.pathname === "/broken/v8/management/credentials") return new Response("upstream exploded", { status: 502, statusText: "Bad Gateway" })
+    if (url.pathname === "/html/v8/management/credentials")
+      return Response.json({
+        files: [{ provider: "codex", auth_index: "h1", label: "h", quota: { signals: { "X-Codex-Primary-Used-Percent": "3" } } }],
+      })
+    if (url.pathname === "/html/v8/management/requests/api-call") return Response.json({ status_code: 200, header: {}, body: "<html>login</html>" })
     if (url.pathname === "/failing/v8/management/credentials")
       return Response.json({
         files: [{ provider: "codex", auth_index: "x1", label: "x", quota: { signals: { "X-Codex-Primary-Used-Percent": "9" } } }],
@@ -76,6 +82,22 @@ describe("fetchAccounts", () => {
       ok: true,
       accounts: [
         { provider: "codex", label: "x", authIndex: "x1", observedAt: undefined, windows: [{ kind: "5h", usedPercent: 9, resetAt: undefined }] },
+      ],
+    })
+  })
+
+  test("reports the HTTP status when the proxy answers with something other than JSON", async () => {
+    expect(await fetchAccounts({ baseURL: `${server.url.origin}/broken`, managementKey: "secret" }, 0)).toEqual({
+      ok: false,
+      error: "HTTP 502: Bad Gateway",
+    })
+  })
+
+  test("keeps the recorded signals when the upstream answers a probe with something other than JSON", async () => {
+    expect(await fetchAccounts({ baseURL: `${server.url.origin}/html`, managementKey: "secret" }, 0)).toEqual({
+      ok: true,
+      accounts: [
+        { provider: "codex", label: "h", authIndex: "h1", observedAt: undefined, windows: [{ kind: "5h", usedPercent: 3, resetAt: undefined }] },
       ],
     })
   })

@@ -28,6 +28,8 @@ These rules follow the [OpenCode style guide](https://github.com/anomalyco/openc
 - Test behavior: call the exported functions the way `src/tui.tsx` does and assert literal values with `toEqual` or `toBe`.
 - Do not mock. `test/client.test.ts` runs a real `Bun.serve` server.
 - `bun test` and `bun run typecheck` pass before every commit.
+- `bunfig.toml` turns on coverage and fails `bun test` below 95% of lines or functions in the files the tests load. `src/tui.tsx` and the entry points are not loaded by tests; check them end to end instead.
+- CI (`.github/workflows/ci.yml`) runs `typecheck` and `test` as parallel jobs on every push to `main` and every pull request. Both are required checks on `main`. Pin new actions to a full commit SHA with the version in a comment.
 
 ## End-to-end checks
 

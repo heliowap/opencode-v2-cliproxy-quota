@@ -44,24 +44,20 @@ export default Plugin.define({
       const info = context.data.location.provider.list(context.location)?.find((item) => item.id === model.providerID)
       return quotaSource(info ?? { id: model.providerID }, settings)
     })
-    const accounts = createMemo(() => {
-      if (source() !== "openai") return proxyAccounts()
+    const quota = createMemo(() => {
+      if (source() !== "openai") return { accounts: proxyAccounts(), error: proxyError() }
       const current = openai()
-      return current.ok ? current.accounts : []
-    })
-    const error = createMemo(() => {
-      if (source() !== "openai") return proxyError()
-      const current = openai()
-      return current.ok ? undefined : current.error
+      if (!current.ok) return { accounts: [], error: current.error }
+      return { accounts: current.accounts, error: undefined }
     })
     const provider = createMemo(() => {
       const model = context.ui.model.current()
-      if (source() === "openai") return accounts().length > 0 || error() ? "codex" : undefined
+      if (source() === "openai") return quota().accounts.length > 0 || quota().error ? "codex" : undefined
       return source() && model ? providerForModel(model.modelID) : undefined
     })
     const windows = createMemo(() => {
       const model = context.ui.model.current()
-      return provider() && model ? windowsForModel(accounts(), model.modelID) : []
+      return provider() && model ? windowsForModel(quota().accounts, model.modelID) : []
     })
 
     context.ui.slot({
@@ -83,10 +79,10 @@ export default Plugin.define({
             <text fg={context.theme.text.base}>
               <b>Quota</b>
             </text>
-            <Show when={error()}>
-              <text fg={context.theme.text.feedback.error.base}>{error()}</text>
+            <Show when={quota().error}>
+              <text fg={context.theme.text.feedback.error.base}>{quota().error}</text>
             </Show>
-            <For each={accounts().filter((account) => account.provider === provider())}>
+            <For each={quota().accounts.filter((account) => account.provider === provider())}>
               {(account) => (
                 <box flexDirection="column">
                   <text fg={context.theme.text.muted}>{account.label}</text>
@@ -110,8 +106,8 @@ export default Plugin.define({
           slash: { name: "quota" },
           run: async () => {
             await refresh()
-            const message = error() ?? (footerText(windows()) || "No quota data for the selected model")
-            context.ui.toast.show({ title: "Quota", message, variant: error() ? "error" : "info" })
+            const message = quota().error ?? (footerText(windows()) || "No quota data for the selected model")
+            context.ui.toast.show({ title: "Quota", message, variant: quota().error ? "error" : "info" })
           },
         },
       ],

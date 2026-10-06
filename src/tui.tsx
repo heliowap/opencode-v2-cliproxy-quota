@@ -3,9 +3,9 @@ import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { fetchAccounts, resolveSettings } from "./client.ts"
-import { bar, footerText, formatReset, isProxyProvider, level, providerForModel, summarize, type Account, type Window } from "./quota.ts"
+import { bar, footerText, formatReset, isProxyProvider, level, providerForModel, windowsForModel, type Account, type Window } from "./quota.ts"
 
-const LABEL = { "5h": "5h", day: "day", week: "week" } as const
+const LABEL = { "5h": "5h", day: "day", week: "week", fable: "fable" } as const
 
 export default Plugin.define({
   id: "cliproxy.quota",
@@ -31,8 +31,8 @@ export default Plugin.define({
       return providerForModel(model.modelID)
     })
     const windows = createMemo(() => {
-      const current = provider()
-      return current ? summarize(accounts(), current) : []
+      const model = context.ui.model.current()
+      return provider() && model ? windowsForModel(accounts(), model.modelID) : []
     })
 
     context.ui.slot({
@@ -102,7 +102,7 @@ export default Plugin.define({
 function WindowRow(props: { context: Context; item: Window; now: number }) {
   return (
     <text fg={color(props.context, props.item.usedPercent)}>
-      {`${LABEL[props.item.kind].padEnd(5)}${bar(100 - props.item.usedPercent)} ${String(Math.round(100 - props.item.usedPercent)).padStart(3)}% left ${formatReset(props.item.resetAt, props.now)}`}
+      {`${LABEL[props.item.kind].padEnd(6)}${bar(100 - props.item.usedPercent)} ${String(Math.round(100 - props.item.usedPercent)).padStart(3)}% left ${formatReset(props.item.resetAt, props.now)}`}
     </text>
   )
 }

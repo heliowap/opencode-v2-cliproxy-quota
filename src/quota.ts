@@ -1,4 +1,4 @@
-export type WindowKind = "5h" | "day" | "week"
+export type WindowKind = "5h" | "day" | "week" | "fable"
 
 export type Window = {
   readonly kind: WindowKind
@@ -24,9 +24,9 @@ export type Account = {
 
 type Signals = Readonly<Record<string, string>>
 
-const KIND_ORDER: readonly WindowKind[] = ["5h", "day", "week"]
+const KIND_ORDER: readonly WindowKind[] = ["5h", "day", "week", "fable"]
 
-const KIND_LABEL: Record<WindowKind, string> = { "5h": "5h", day: "day", week: "wk" }
+const KIND_LABEL: Record<WindowKind, string> = { "5h": "5h", day: "day", week: "wk", fable: "fable" }
 
 // CLIProxyAPI records passive quota signals only for these providers; each reports its windows differently.
 const READERS: Record<string, (signals: Signals, base: number) => Window[]> = {
@@ -44,7 +44,8 @@ const READERS: Record<string, (signals: Signals, base: number) => Window[]> = {
 }
 
 // The plugin asks upstream through the proxy's api-call with the same requests as the CLIProxyAPI Management Center.
-// CLIProxyAPI records no quota for Devin and Antigravity, and its Codex signals go stale after a manual reset.
+// CLIProxyAPI records no quota for Devin and Antigravity, its Codex and Claude signals go stale after a reset, and it
+// never records the Claude Fable window.
 const PROBES: Record<
   string,
   {
@@ -77,6 +78,27 @@ const PROBES: Record<
         return [{ kind: codexKind(seconds === undefined ? undefined : seconds / 60, 0), usedPercent: used, resetAt: unixSeconds(scalar(item.reset_at)) }]
       })
       return windows.length === 0 ? [] : [{ provider: "codex", windows }]
+    },
+  },
+  claude: {
+    call: () => ({
+      method: "GET",
+      url: "https://api.anthropic.com/api/oauth/usage",
+      header: {
+        "User-Agent": "claude-cli/2.1.280 (external, cli)",
+        Authorization: "Bearer $TOKEN$",
+        "Content-Type": "application/json",
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+    }),
+    parse: (body) => {
+      if (!isRecord(body)) return []
+      const windows = [
+        readClaudeUsage("5h", body.five_hour),
+        readClaudeUsage("week", body.seven_day),
+        readClaudeFable(body) ?? readClaudeUsage("fable", body.iguana_necktie),
+      ].filter((item) => item !== undefined)
+      return windows.length === 0 ? [] : [{ provider: "claude", windows }]
     },
   },
   devin: {
@@ -200,6 +222,13 @@ export function summarize(accounts: readonly Account[], provider: string) {
   })
 }
 
+export function windowsForModel(accounts: readonly Account[], modelID: string) {
+  const provider = providerForModel(modelID)
+  if (!provider) return []
+  const fable = modelID.toLowerCase().includes("fable")
+  return summarize(accounts, provider).filter((item) => fable || item.kind !== "fable")
+}
+
 export function footerText(windows: readonly Window[]) {
   const parts = KIND_ORDER.flatMap((kind) => windows.filter((item) => item.kind === kind)).map(
     (item) => `${KIND_LABEL[item.kind]} ${Math.round(100 - item.usedPercent)}%`,
@@ -243,6 +272,25 @@ function readDevinStatus(body: unknown): Window[] {
     if (remainingPercent === undefined) return []
     return [{ kind: entry[0], usedPercent: 100 - remainingPercent, resetAt }]
   })
+}
+
+function readClaudeUsage(kind: WindowKind, value: unknown): Window | undefined {
+  if (!isRecord(value)) return undefined
+  const used = number(scalar(value.utilization))
+  if (used === undefined) return undefined
+  return { kind, usedPercent: used, resetAt: isoTime(value.resets_at) }
+}
+
+// Matches the Management Center: the Fable weekly limit is the weekly_scoped entry whose model is Fable.
+function readClaudeFable(body: Record<string, unknown>): Window | undefined {
+  const candidates = (Array.isArray(body.limits) ? body.limits : []).filter((limit): limit is Record<string, unknown> => {
+    if (!isRecord(limit) || limit.kind !== "weekly_scoped" || number(scalar(limit.percent)) === undefined) return false
+    const model = isRecord(limit.scope) && isRecord(limit.scope.model) ? text(limit.scope.model.display_name)?.toLowerCase() : undefined
+    return model === "fable" || model === "fable 5"
+  })
+  const limit = candidates.find((item) => item.is_active === true) ?? candidates[0]
+  if (!limit) return undefined
+  return { kind: "fable", usedPercent: number(scalar(limit.percent)) ?? 0, resetAt: isoTime(limit.resets_at) }
 }
 
 function readAntigravityBucket(bucket: unknown): Window[] {

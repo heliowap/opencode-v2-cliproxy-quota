@@ -16,11 +16,11 @@ Percentages are the quota left, as in the CLIProxyAPI Management Center. A windo
 | Provider | Windows | Source |
 | --- | --- | --- |
 | Codex | 5 hours and weekly | ChatGPT `wham/usage` |
-| Claude | 5 hours and 7 days | Rate-limit headers that CLIProxyAPI records |
+| Claude | 5 hours, 7 days, and 7-day Fable | Anthropic `api/oauth/usage` |
 | Devin | daily and weekly | Codeium `GetUserStatus` |
 | Antigravity | 5 hours and weekly, per model group | Google `retrieveUserQuotaSummary` |
 
-Claude values appear only after CLIProxyAPI has served at least one request with that account. A recorded window whose reset time has passed counts as renewed. Other providers show nothing.
+The Claude Fable window limits only Fable models, so the footer shows it only when a Fable model is selected. The sidebar always lists it. Other providers show nothing.
 
 Antigravity splits its quota into a Gemini group and a group for Claude and GPT-OSS models. The plugin shows the group that serves the selected model.
 
@@ -74,9 +74,9 @@ Pass options with the object form in `opencode.jsonc`. Prefer the environment va
 
 The plugin calls `GET /v8/management/credentials` on CLIProxyAPI to list the accounts.
 
-For Codex, Devin, and Antigravity, it then asks CLIProxyAPI's `POST /v8/management/requests/api-call` to call the upstream quota endpoint with each account's credential. These are the same requests the CLIProxyAPI Management Center makes, one per account on each refresh. If a request fails, the plugin falls back to the quota signals CLIProxyAPI recorded for that account, if any.
+For each Claude, Codex, Devin, and Antigravity account, it then asks CLIProxyAPI's `POST /v8/management/requests/api-call` to call the upstream quota endpoint with each account's credential. These are the same requests the CLIProxyAPI Management Center makes, one per account on each refresh.
 
-For Claude, it reads the `quota.signals` that CLIProxyAPI records from Claude's rate-limit headers. The plugin queries Codex live because those recorded signals go stale after a manual quota reset.
+If a request fails, the plugin falls back to the `quota.signals` that CLIProxyAPI recorded from the Claude and Codex rate-limit headers. Those signals change only when CLIProxyAPI serves a request, so they go stale after a manual reset, and they never include the Fable window. A recorded window whose reset time has passed counts as renewed.
 
 To pick the provider for the selected model, the plugin strips a `cpa-` prefix from the model ID and matches the rest in this order:
 

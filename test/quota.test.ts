@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { bar, footerText, formatReset, isProxyProvider, level, parseCredentials, parseProbe, probeTargets, providerForModel, summarize } from "../src/quota.ts"
+import { bar, footerText, formatReset, isProxyProvider, level, parseCredentials, parseProbe, probeTargets, providerForModel, summarize, windowsForModel } from "../src/quota.ts"
 
 const now = Date.parse("2026-10-06T12:00:00Z")
 const sec = (iso: string) => String(Date.parse(iso) / 1000)
@@ -283,6 +283,31 @@ describe("formatReset", () => {
   })
 })
 
+describe("windowsForModel", () => {
+  const accounts = [
+    {
+      provider: "claude",
+      label: "c",
+      authIndex: "c1",
+      observedAt: undefined,
+      windows: [
+        { kind: "5h" as const, usedPercent: 34, resetAt: undefined },
+        { kind: "week" as const, usedPercent: 61, resetAt: undefined },
+        { kind: "fable" as const, usedPercent: 0, resetAt: undefined },
+      ],
+    },
+  ]
+
+  test("includes the Fable window only for Fable models", () => {
+    expect(footerText(windowsForModel(accounts, "claude-fable-5-1"))).toBe("5h 66% · wk 39% · fable 100% left")
+    expect(footerText(windowsForModel(accounts, "cpa-claude-opus-5-5"))).toBe("5h 66% · wk 39% left")
+  })
+
+  test("returns nothing for a model no provider serves", () => {
+    expect(windowsForModel(accounts, "glm-5.3-flash")).toEqual([])
+  })
+})
+
 describe("level", () => {
   test("grades usage for coloring", () => {
     expect([0, 79, 80, 94, 95, 100].map(level)).toEqual(["ok", "ok", "warning", "warning", "error", "error"])
@@ -323,7 +348,7 @@ describe("probeTargets", () => {
         files: [
           { provider: "devin", auth_index: "a1", label: "me@example.com", quota: { signals: {} } },
           { provider: "devin", auth_index: "a2", label: "off", disabled: true },
-          { provider: "claude", auth_index: "a4", label: "claude" },
+          { provider: "kimi", auth_index: "a4", label: "kimi" },
           { provider: "devin", label: "no index" },
         ],
       }),
@@ -373,6 +398,27 @@ describe("probeTargets", () => {
 })
 
 describe("probeTargets for Codex", () => {
+  test("builds an oauth/usage call for Claude credentials", () => {
+    expect(probeTargets({ files: [{ provider: "claude", auth_index: "k1", label: "me@example.com" }] })).toEqual([
+      {
+        provider: "claude",
+        label: "me@example.com",
+        authIndex: "k1",
+        call: {
+          auth_index: "k1",
+          method: "GET",
+          url: "https://api.anthropic.com/api/oauth/usage",
+          header: {
+            "User-Agent": "claude-cli/2.1.280 (external, cli)",
+            Authorization: "Bearer $TOKEN$",
+            "Content-Type": "application/json",
+            "anthropic-beta": "oauth-2025-04-20",
+          },
+        },
+      },
+    ])
+  })
+
   test("builds a wham/usage call with the ChatGPT account from the ID token", () => {
     expect(
       probeTargets({
@@ -512,7 +558,48 @@ describe("parseProbe", () => {
     ])
   })
 
+  test("reads the Claude 5h, 7-day, and Fable windows from oauth/usage", () => {
+    expect(
+      parseProbe("claude", {
+        five_hour: { utilization: 34.0, resets_at: "2026-10-06T11:40:00.338870+00:00" },
+        seven_day: { utilization: 61.0, resets_at: "2026-10-09T03:00:00.338891+00:00" },
+        iguana_necktie: { utilization: 100.0, resets_at: "2026-11-05T07:59:00+00:00" },
+        limits: [
+          { kind: "weekly_all", percent: 61, resets_at: "2026-10-09T03:00:00Z", scope: null },
+          { kind: "weekly_scoped", percent: 0, resets_at: "2026-10-09T03:00:00.339148+00:00", scope: { model: { display_name: "Fable" } }, is_active: false },
+        ],
+      }),
+    ).toEqual([
+      {
+        provider: "claude",
+        windows: [
+          { kind: "5h", usedPercent: 34, resetAt: Date.parse("2026-10-06T11:40:00.338Z") },
+          { kind: "week", usedPercent: 61, resetAt: Date.parse("2026-10-09T03:00:00.338Z") },
+          { kind: "fable", usedPercent: 0, resetAt: Date.parse("2026-10-09T03:00:00.339Z") },
+        ],
+      },
+    ])
+  })
+
+  test("falls back to iguana_necktie for the Claude Fable window, as the Management Center does", () => {
+    expect(
+      parseProbe("claude", {
+        five_hour: { utilization: 10, resets_at: null },
+        iguana_necktie: { utilization: 40, resets_at: "2026-10-09T03:00:00Z" },
+      }),
+    ).toEqual([
+      {
+        provider: "claude",
+        windows: [
+          { kind: "5h", usedPercent: 10, resetAt: undefined },
+          { kind: "fable", usedPercent: 40, resetAt: Date.parse("2026-10-09T03:00:00Z") },
+        ],
+      },
+    ])
+  })
+
   test("returns nothing for an unknown provider or a malformed body", () => {
+    expect(parseProbe("kimi", {})).toEqual([])
     expect(parseProbe("claude", {})).toEqual([])
     expect(parseProbe("codex", {})).toEqual([])
     expect(parseProbe("devin", "nope")).toEqual([])

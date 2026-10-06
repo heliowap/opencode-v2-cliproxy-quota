@@ -26,10 +26,17 @@ These rules follow the [OpenCode style guide](https://github.com/anomalyco/openc
 
 - Write the failing test first, run it to see it fail, then implement.
 - Test behavior: call the exported functions the way `src/tui.tsx` does and assert literal values with `toEqual` or `toBe`.
+- Tautological tests are forbidden. A test must fail when every function it imports returns `undefined`. These shapes break that rule:
+  - A weak assertion: `toBeDefined`, `toBeTruthy`, `not.toThrow`, `toBeInstanceOf`, `toBeGreaterThan(0)`, or none.
+  - An absence alone: `toEqual([])`, `toBe("")`, `toBe(false)`, or `toBeUndefined` without a presence check on another input in the same test.
+  - An expected value computed by code, such as `Date.parse(...)`. Write the literal.
+  - A restated constant: an upstream URL, header, request body, or config default copied from `src/`. Test the mechanism that reads it, such as which credentials get a probe and which fields come from the credential.
+  - A fixture that asserts itself, where the subject never runs in the test body.
+- `bun script/check-tests.ts` enforces the first rule. It replaces every function exported from `src/quota.ts` and `src/client.ts` with one that returns `undefined` and fails if any test still passes. Add new source modules to its `modules` list.
 - Do not mock. `test/client.test.ts` runs a real `Bun.serve` server.
 - `bun test` and `bun run typecheck` pass before every commit.
 - `bunfig.toml` turns on coverage and fails `bun test` below 95% of lines or functions in the files the tests load. `src/tui.tsx` and the entry points are not loaded by tests; check them end to end instead.
-- CI (`.github/workflows/ci.yml`) runs `typecheck` and `test` as parallel jobs on every push to `main` and every pull request. Both are required checks on `main`. Pin new actions to a full commit SHA with the version in a comment.
+- CI (`.github/workflows/ci.yml`) runs `typecheck`, `test`, and `check-tests` as parallel jobs on every push to `main` and every pull request. All three are required checks on `main`. Pin new actions to a full commit SHA with the version in a comment.
 
 ## End-to-end checks
 

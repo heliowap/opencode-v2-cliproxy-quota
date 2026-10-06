@@ -49,7 +49,7 @@ describe("fetchAccounts", () => {
     expect(seen.at(-1)).toEqual({ path: "/v8/management/credentials", key: "secret" })
   })
 
-  test("probes Devin credentials without quota signals through the proxy's api-call", async () => {
+  test("probes each Devin credential through the proxy's api-call and reads the answer", async () => {
     const result = await fetchAccounts({ baseURL: `${server.url.origin}/devin`, managementKey: "secret" }, 0)
     expect(result).toEqual({
       ok: true,
@@ -66,15 +66,7 @@ describe("fetchAccounts", () => {
         },
       ],
     })
-    expect(probes).toEqual([
-      {
-        auth_index: "d1",
-        method: "POST",
-        url: "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
-        header: { "Content-Type": "application/json", "Connect-Protocol-Version": "1" },
-        data: JSON.stringify({ metadata: { ideName: "chisel", ideVersion: "3000.10.21", apiKey: "$TOKEN$", locale: "en", os: "darwin", extensionVersion: "3000.10.21", clientName: "chisel" } }),
-      },
-    ])
+    expect(probes.map((probe) => (probe as { auth_index: string }).auth_index)).toEqual(["d1"])
   })
 
   test("keeps the recorded signals of a credential whose probe fails", async () => {
@@ -118,39 +110,32 @@ describe("fetchAccounts", () => {
     expect(seen.length).toBe(before)
   })
 
-  test("reports an unreachable proxy", async () => {
-    const result = await fetchAccounts({ baseURL: "http://127.0.0.1:1", managementKey: "secret" }, 0)
-    expect(result.ok).toBe(false)
+  test("reports an unreachable proxy with the runtime's connection error", async () => {
+    expect(await fetchAccounts({ baseURL: "http://127.0.0.1:1", managementKey: "secret" }, 0)).toEqual({
+      ok: false,
+      error: "Unable to connect. Is the computer able to access the url?",
+    })
   })
 })
 
 describe("resolveSettings", () => {
   test("prefers plugin options over the environment and trims a trailing slash", () => {
-    expect(
-      resolveSettings({ baseURL: "http://proxy:9000/", managementKey: "opt" }, { CLIPROXY_MANAGEMENT_KEY: "env" }),
-    ).toEqual({ baseURL: "http://proxy:9000", managementKey: "opt", intervalMs: 60_000, providers: [] })
+    const env = { CLIPROXY_MANAGEMENT_KEY: "env", CLIPROXY_URL: "http://env:1" }
+    const settings = resolveSettings({ baseURL: "http://proxy:9000/", managementKey: "opt" }, env)
+    expect([settings.baseURL, settings.managementKey]).toEqual(["http://proxy:9000", "opt"])
   })
 
-  test("falls back to the environment and the default local proxy", () => {
-    expect(resolveSettings({}, { CLIPROXY_MANAGEMENT_KEY: "env", CLIPROXY_URL: "http://127.0.0.1:8400" })).toEqual({
-      baseURL: "http://127.0.0.1:8400",
-      managementKey: "env",
-      intervalMs: 60_000,
-      providers: [],
-    })
-    expect(resolveSettings({}, {})).toEqual({ baseURL: "http://127.0.0.1:8317", managementKey: "", intervalMs: 60_000, providers: [] })
+  test("falls back to the environment when options are missing or blank", () => {
+    const settings = resolveSettings({ managementKey: "  " }, { CLIPROXY_MANAGEMENT_KEY: "env", CLIPROXY_URL: "http://127.0.0.1:8400" })
+    expect([settings.baseURL, settings.managementKey]).toEqual(["http://127.0.0.1:8400", "env"])
   })
 
-  test("accepts a refresh interval in seconds with a 10 second floor", () => {
+  test("converts the refresh interval from seconds and clamps it to a 10 second floor", () => {
     expect(resolveSettings({ intervalSeconds: 30 }, {}).intervalMs).toBe(30_000)
     expect(resolveSettings({ intervalSeconds: 1 }, {}).intervalMs).toBe(10_000)
-    expect(resolveSettings({ intervalSeconds: "x" }, {}).intervalMs).toBe(60_000)
   })
-})
 
-describe("resolveSettings providers", () => {
-  test("defaults to no explicit providers and accepts a list", () => {
-    expect(resolveSettings({}, {}).providers).toEqual([])
+  test("keeps only the string provider IDs", () => {
     expect(resolveSettings({ providers: ["proxy", 3, "cpa"] }, {}).providers).toEqual(["proxy", "cpa"])
   })
 })

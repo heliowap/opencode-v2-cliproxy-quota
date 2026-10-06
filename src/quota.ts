@@ -168,12 +168,25 @@ export function parseCredentials(body: unknown, now: number): Account[] {
     const quota = isRecord(file.quota) ? file.quota : undefined
     if (!reader || !quota || !isRecord(quota.signals)) return []
     const observedAt = isoTime(quota.observed_at)
-    const windows = reader(stringSignals(quota.signals), observedAt ?? now).map((item) =>
-      item.resetAt !== undefined && item.resetAt <= now ? { kind: item.kind, usedPercent: 0, resetAt: undefined } : item,
-    )
+    const windows = reader(stringSignals(quota.signals), observedAt ?? now).map((item) => renew(item, now))
     if (windows.length === 0) return []
     return [{ provider, label: text(file.label) || text(file.name) || provider, authIndex: text(file.auth_index), observedAt, windows }]
   })
+}
+
+// A live probe decides which windows a credential has. The proxy's recorded signals keep updating with every request it
+// serves, so a window takes the recorded value when it was observed after the probe. Fable has no recorded signal.
+export function mergeAccounts(recorded: readonly Account[], live: readonly Account[], now: number): Account[] {
+  const merged = live.map((account) => {
+    const other = recorded.find((item) => item.authIndex === account.authIndex && item.provider === account.provider)
+    const fresher = other && (other.observedAt ?? 0) > (account.observedAt ?? 0) ? other : undefined
+    return {
+      ...account,
+      observedAt: (fresher ?? account).observedAt,
+      windows: account.windows.map((window) => renew(fresher?.windows.find((item) => item.kind === window.kind) ?? window, now)),
+    }
+  })
+  return [...recorded.filter((item) => !live.some((account) => account.authIndex === item.authIndex)), ...merged]
 }
 
 export function probeTargets(body: unknown) {
@@ -255,6 +268,10 @@ export function level(usedPercent: number) {
 export function bar(usedPercent: number) {
   const filled = Math.min(10, Math.max(0, Math.round(usedPercent / 10)))
   return "█".repeat(filled) + "░".repeat(10 - filled)
+}
+
+function renew(window: Window, now: number): Window {
+  return window.resetAt !== undefined && window.resetAt <= now ? { kind: window.kind, usedPercent: 0, resetAt: undefined } : window
 }
 
 function readDevinStatus(body: unknown): Window[] {

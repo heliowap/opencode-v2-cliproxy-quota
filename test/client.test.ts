@@ -1,8 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { fetchAccounts, resolveSettings } from "../src/client.ts"
+import type { Account } from "../src/quota.ts"
 
 const seen: { path: string; key: string | null }[] = []
 const probes: unknown[] = []
+const claude = { status: 200, probes: 0, observedAt: "2026-10-06T12:00:00Z", fiveHour: "0.2", sevenDay: "0.4" }
+const claudeSettings = () => ({ baseURL: `${server.url.origin}/claude`, managementKey: "secret" })
 
 const server = Bun.serve({
   port: 0,
@@ -21,6 +24,43 @@ const server = Bun.serve({
         files: [{ provider: "codex", auth_index: "x1", label: "x", quota: { signals: { "X-Codex-Primary-Used-Percent": "9" } } }],
       })
     if (url.pathname === "/failing/v8/management/requests/api-call") return Response.json({ status_code: 401, header: {}, body: "{}" })
+    if (url.pathname === "/claude/v8/management/credentials")
+      return Response.json({
+        files: [
+          {
+            provider: "claude",
+            auth_index: "c1",
+            label: "claude-a",
+            quota: {
+              observed_at: claude.observedAt,
+              signals: {
+                "Anthropic-Ratelimit-Unified-5h-Utilization": claude.fiveHour,
+                "Anthropic-Ratelimit-Unified-5h-Reset": "1791298800",
+                "Anthropic-Ratelimit-Unified-7d-Utilization": claude.sevenDay,
+                "Anthropic-Ratelimit-Unified-7d-Reset": "1791514800",
+              },
+            },
+          },
+        ],
+      })
+    if (url.pathname === "/claude/v8/management/requests/api-call") {
+      claude.probes++
+      if (claude.status === 429)
+        return Response.json({
+          status_code: 429,
+          header: { "Retry-After": ["0"] },
+          body: JSON.stringify({ error: { type: "rate_limit_error", message: "Rate limited. Please try again later." } }),
+        })
+      return Response.json({
+        status_code: 200,
+        header: {},
+        body: JSON.stringify({
+          five_hour: { utilization: 34, resets_at: "2026-10-06T15:00:00Z" },
+          seven_day: { utilization: 61, resets_at: "2026-10-09T03:00:00Z" },
+          limits: [{ kind: "weekly_scoped", percent: 25, resets_at: "2026-10-06T13:00:00Z", scope: { model: { display_name: "Fable" } }, is_active: true }],
+        }),
+      })
+    }
     if (url.pathname.endsWith("/v8/management/requests/api-call")) {
       const body = await request.json()
       probes.push(body)
@@ -76,6 +116,75 @@ describe("fetchAccounts", () => {
         { provider: "codex", label: "x", authIndex: "x1", observedAt: undefined, windows: [{ kind: "5h", usedPercent: 9, resetAt: undefined }] },
       ],
     })
+  })
+
+  test("keeps the last live Claude windows, including Fable, when a later probe is rate limited", async () => {
+    Object.assign(claude, { status: 200, probes: 0, observedAt: "2026-10-06T12:00:00Z", fiveHour: "0.2", sevenDay: "0.4" })
+    const memory = new Map()
+    const live: Account = {
+      provider: "claude",
+      label: "claude-a",
+      authIndex: "c1",
+      observedAt: 1791288600_000,
+      windows: [
+        { kind: "5h", usedPercent: 34, resetAt: 1791298800_000 },
+        { kind: "week", usedPercent: 61, resetAt: 1791514800_000 },
+        { kind: "fable", usedPercent: 25, resetAt: 1791291600_000 },
+      ],
+    }
+    expect(await fetchAccounts(claudeSettings(), 1791288600_000, memory)).toEqual({ ok: true, accounts: [live] })
+    claude.status = 429
+    expect(await fetchAccounts(claudeSettings(), 1791288900_000, memory)).toEqual({ ok: true, accounts: [live] })
+    expect(claude.probes).toBe(2)
+  })
+
+  test("asks Anthropic about a Claude credential at most once every five minutes", async () => {
+    Object.assign(claude, { status: 200, probes: 0, observedAt: "2026-10-06T12:00:00Z", fiveHour: "0.2", sevenDay: "0.4" })
+    const memory = new Map()
+    const counts: number[] = []
+    for (const now of [1791288600_000, 1791288660_000, 1791288899_000, 1791288900_000]) {
+      await fetchAccounts(claudeSettings(), now, memory)
+      counts.push(claude.probes)
+    }
+    expect(counts).toEqual([1, 1, 1, 2])
+  })
+
+  test("shows each Claude window from its newest observation and keeps Fable from the last probe", async () => {
+    Object.assign(claude, { status: 200, probes: 0, observedAt: "2026-10-06T12:00:00Z", fiveHour: "0.2", sevenDay: "0.4" })
+    const memory = new Map()
+    await fetchAccounts(claudeSettings(), 1791288600_000, memory)
+    Object.assign(claude, { observedAt: "2026-10-06T12:12:00Z", fiveHour: "0.5", sevenDay: "0.62" })
+    expect(await fetchAccounts(claudeSettings(), 1791288780_000, memory)).toEqual({
+      ok: true,
+      accounts: [
+        {
+          provider: "claude",
+          label: "claude-a",
+          authIndex: "c1",
+          observedAt: 1791288720_000,
+          windows: [
+            { kind: "5h", usedPercent: 50, resetAt: 1791298800_000 },
+            { kind: "week", usedPercent: 62, resetAt: 1791514800_000 },
+            { kind: "fable", usedPercent: 25, resetAt: 1791291600_000 },
+          ],
+        },
+      ],
+    })
+  })
+
+  test("treats a kept live window whose reset time has passed as renewed", async () => {
+    Object.assign(claude, { status: 200, probes: 0, observedAt: "2026-10-06T12:00:00Z", fiveHour: "0.2", sevenDay: "0.4" })
+    const memory = new Map()
+    await fetchAccounts(claudeSettings(), 1791288600_000, memory)
+    claude.status = 429
+    const later = await fetchAccounts(claudeSettings(), 1791295800_000, memory)
+    expect(later.ok && later.accounts.map((account) => account.windows)).toEqual([
+      [
+        { kind: "5h", usedPercent: 34, resetAt: 1791298800_000 },
+        { kind: "week", usedPercent: 61, resetAt: 1791514800_000 },
+        { kind: "fable", usedPercent: 0, resetAt: undefined },
+      ],
+    ])
   })
 
   test("reports the HTTP status when the proxy answers with something other than JSON", async () => {

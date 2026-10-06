@@ -2,7 +2,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, createSignal, For, Show } from "solid-js"
-import { fetchAccounts, resolveSettings } from "./client.ts"
+import { fetchAccounts, resolveSettings, type ProbeMemory } from "./client.ts"
 import { bar, footerText, formatReset, isProxyProvider, level, providerForModel, windowsForModel, type Account, type Window } from "./quota.ts"
 
 const LABEL = { "5h": "5h", day: "day", week: "week", fable: "fable" } as const
@@ -14,9 +14,10 @@ export default Plugin.define({
     const [accounts, setAccounts] = createSignal<Account[]>([])
     const [error, setError] = createSignal<string>()
     const [now, setNow] = createSignal(Date.now())
+    const memory: ProbeMemory = new Map()
 
     const refresh = async () => {
-      const result = await fetchAccounts(settings, Date.now())
+      const result = await fetchAccounts(settings, Date.now(), memory)
       setNow(Date.now())
       if (!result.ok) return setError(result.error)
       setError(undefined)

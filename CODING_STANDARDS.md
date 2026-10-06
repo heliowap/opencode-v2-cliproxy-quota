@@ -5,7 +5,7 @@ These rules follow the [OpenCode style guide](https://github.com/anomalyco/openc
 ## Architecture
 
 - `src/quota.ts` holds every quota rule as pure functions: parsing the management API response, mapping a model to a provider, summarizing, and formatting. It does no I/O and takes `now` as an argument.
-- `src/client.ts` is the only code that talks to CLIProxyAPI. It returns a `FetchResult` union instead of throwing. A live probe result replaces the recorded signals of the same credential; a failed probe falls back to them.
+- `src/client.ts` is the only code that talks to CLIProxyAPI. It returns a `FetchResult` union instead of throwing. A live probe result decides which windows a credential shows, and each window takes the newer of the probe and the recorded signals (`mergeAccounts`). The caller keeps one `ProbeMemory` across refreshes: it holds each credential's last probe answer, which a failed or skipped probe reuses, and spaces out probes for providers in `PROBE_INTERVAL_MS`.
 - `src/tui.tsx` is a thin adapter. It reads OpenCode state, calls the functions above, and renders slots. Keep logic out of it.
 - `index.ts` and `tui.tsx` at the root are entry points. OpenCode resolves a local plugin directory by looking for `index` (or `server`) and `tui` files at its root, not through `package.json` `exports`.
 - `src/index.ts` is an empty server plugin. OpenCode loads a package's TUI entry only when the package also has a server entry.

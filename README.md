@@ -74,9 +74,11 @@ Pass options with the object form in `opencode.jsonc`. Prefer the environment va
 
 The plugin calls `GET /v8/management/credentials` on CLIProxyAPI to list the accounts.
 
-For each Claude, Codex, Devin, and Antigravity account, it then asks CLIProxyAPI's `POST /v8/management/requests/api-call` to call the upstream quota endpoint with each account's credential. These are the same requests the CLIProxyAPI Management Center makes, one per account on each refresh.
+For each Claude, Codex, Devin, and Antigravity account, it then asks CLIProxyAPI's `POST /v8/management/requests/api-call` to call the upstream quota endpoint with each account's credential. These are the same requests the CLIProxyAPI Management Center makes, one per account on each refresh. Claude accounts are the exception: Anthropic rate-limits its usage endpoint, so each OpenCode window asks about a Claude account at most once every five minutes.
 
-If a request fails, the plugin falls back to the `quota.signals` that CLIProxyAPI recorded from the Claude and Codex rate-limit headers. Those signals change only when CLIProxyAPI serves a request, so they go stale after a manual reset, and they never include the Fable window. A recorded window whose reset time has passed counts as renewed.
+The plugin also reads the `quota.signals` that CLIProxyAPI recorded from the Claude and Codex rate-limit headers. Those signals change only when CLIProxyAPI serves a request, so they go stale after a manual reset, and they never include the Fable window. Each window shows whichever of the two was observed last.
+
+If a request fails, the plugin keeps the last answer it got for that account, Fable included. It shows only the recorded signals until the first answer arrives. A window whose reset time has passed counts as renewed.
 
 To pick the provider for the selected model, the plugin strips a `cpa-` prefix from the model ID and matches the rest in this order:
 

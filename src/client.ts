@@ -1,36 +1,45 @@
-import { parseCredentials, parseProbe, probeTargets, type Account } from "./quota.ts"
+import { mergeAccounts, parseCredentials, parseProbe, probeTargets, type Account } from "./quota.ts"
 
 export type Settings = { readonly baseURL: string; readonly managementKey: string }
 
 export type FetchResult = { readonly ok: true; readonly accounts: Account[] } | { readonly ok: false; readonly error: string }
 
+export type ProbeMemory = Map<string, { readonly attemptedAt: number; readonly live: readonly Account[] }>
+
 const DEFAULT_URL = "http://127.0.0.1:8317"
 const DEFAULT_INTERVAL_MS = 60_000
 const MIN_INTERVAL_MS = 10_000
 
-export async function fetchAccounts(settings: Settings, now: number): Promise<FetchResult> {
+// Anthropic allows a few oauth/usage requests per token every few minutes and answers 429 with Retry-After: 0.
+const PROBE_INTERVAL_MS: Readonly<Record<string, number>> = { claude: 300_000 }
+
+export async function fetchAccounts(settings: Settings, now: number, memory: ProbeMemory = new Map()): Promise<FetchResult> {
   if (!settings.managementKey)
     return { ok: false, error: "Set the CLIPROXY_MANAGEMENT_KEY environment variable or the managementKey plugin option" }
   const response = await management(settings, "/v8/management/credentials")
   if (!response.ok) return response
-  const probed = (
+  const live = (
     await Promise.all(
       probeTargets(response.body).map(async (target) => {
+        const previous = memory.get(target.authIndex)
+        if (previous && now - previous.attemptedAt < (PROBE_INTERVAL_MS[target.provider] ?? 0)) return previous.live
+        memory.set(target.authIndex, { attemptedAt: now, live: previous?.live ?? [] })
         const probe = await management(settings, "/v8/management/requests/api-call", target.call)
         const results = probe.ok ? parseProbe(target.provider, await upstreamBody(probe.body)) : []
-        return results.map((result) => ({
+        if (results.length === 0) return previous?.live ?? []
+        const accounts = results.map((result) => ({
           provider: result.provider,
           label: target.label,
           authIndex: target.authIndex,
           observedAt: now,
           windows: result.windows,
         }))
+        memory.set(target.authIndex, { attemptedAt: now, live: accounts })
+        return accounts
       }),
     )
   ).flat()
-  const live = new Set(probed.map((account) => account.authIndex))
-  const recorded = parseCredentials(response.body, now).filter((account) => !live.has(account.authIndex ?? ""))
-  return { ok: true, accounts: [...recorded, ...probed] }
+  return { ok: true, accounts: mergeAccounts(parseCredentials(response.body, now), live, now) }
 }
 
 export function resolveSettings(

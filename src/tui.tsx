@@ -102,7 +102,7 @@ export default Plugin.define({
 function WindowRow(props: { context: Context; item: Window; now: number }) {
   return (
     <text fg={color(props.context, props.item.usedPercent)}>
-      {`${LABEL[props.item.kind].padEnd(5)}${bar(props.item.usedPercent)} ${String(Math.round(props.item.usedPercent)).padStart(3)}% ${formatReset(props.item.resetAt, props.now)}`}
+      {`${LABEL[props.item.kind].padEnd(5)}${bar(100 - props.item.usedPercent)} ${String(Math.round(100 - props.item.usedPercent)).padStart(3)}% left ${formatReset(props.item.resetAt, props.now)}`}
     </text>
   )
 }

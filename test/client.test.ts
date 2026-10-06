@@ -2,13 +2,30 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { fetchAccounts, resolveSettings } from "../src/client.ts"
 
 const seen: { path: string; key: string | null }[] = []
+const probes: unknown[] = []
 
 const server = Bun.serve({
   port: 0,
-  fetch(request) {
+  async fetch(request) {
     const url = new URL(request.url)
     seen.push({ path: url.pathname, key: request.headers.get("x-management-key") })
     if (request.headers.get("x-management-key") !== "secret") return Response.json({ error: "invalid management key" }, { status: 401 })
+    if (url.pathname === "/failing/v8/management/credentials")
+      return Response.json({
+        files: [{ provider: "codex", auth_index: "x1", label: "x", quota: { signals: { "X-Codex-Primary-Used-Percent": "9" } } }],
+      })
+    if (url.pathname === "/failing/v8/management/requests/api-call") return Response.json({ status_code: 401, header: {}, body: "{}" })
+    if (url.pathname.endsWith("/v8/management/requests/api-call")) {
+      const body = await request.json()
+      probes.push(body)
+      return Response.json({
+        status_code: 200,
+        header: {},
+        body: JSON.stringify({ userStatus: { planStatus: { dailyQuotaRemainingPercent: 75, weeklyQuotaRemainingPercent: 40 } } }),
+      })
+    }
+    if (url.pathname === "/devin/v8/management/credentials")
+      return Response.json({ files: [{ provider: "devin", auth_index: "d1", label: "dev", quota: { signals: {} } }] })
     return Response.json({
       files: [{ provider: "codex", label: "a", quota: { signals: { "X-Codex-Primary-Used-Percent": "12" } } }],
     })
@@ -21,9 +38,46 @@ describe("fetchAccounts", () => {
   test("reads credentials from the v8 management API with the management key", async () => {
     expect(await fetchAccounts({ baseURL: server.url.origin, managementKey: "secret" }, 0)).toEqual({
       ok: true,
-      accounts: [{ provider: "codex", label: "a", observedAt: undefined, windows: [{ kind: "5h", usedPercent: 12, resetAt: undefined }] }],
+      accounts: [{ provider: "codex", label: "a", authIndex: undefined, observedAt: undefined, windows: [{ kind: "5h", usedPercent: 12, resetAt: undefined }] }],
     })
     expect(seen.at(-1)).toEqual({ path: "/v8/management/credentials", key: "secret" })
+  })
+
+  test("probes Devin credentials without quota signals through the proxy's api-call", async () => {
+    const result = await fetchAccounts({ baseURL: `${server.url.origin}/devin`, managementKey: "secret" }, 0)
+    expect(result).toEqual({
+      ok: true,
+      accounts: [
+        {
+          provider: "devin",
+          label: "dev",
+          authIndex: "d1",
+          observedAt: 0,
+          windows: [
+            { kind: "day", usedPercent: 25, resetAt: undefined },
+            { kind: "week", usedPercent: 60, resetAt: undefined },
+          ],
+        },
+      ],
+    })
+    expect(probes).toEqual([
+      {
+        auth_index: "d1",
+        method: "POST",
+        url: "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
+        header: { "Content-Type": "application/json", "Connect-Protocol-Version": "1" },
+        data: JSON.stringify({ metadata: { ideName: "chisel", ideVersion: "3000.10.21", apiKey: "$TOKEN$", locale: "en", os: "darwin", extensionVersion: "3000.10.21", clientName: "chisel" } }),
+      },
+    ])
+  })
+
+  test("keeps the recorded signals of a credential whose probe fails", async () => {
+    expect(await fetchAccounts({ baseURL: `${server.url.origin}/failing`, managementKey: "secret" }, 0)).toEqual({
+      ok: true,
+      accounts: [
+        { provider: "codex", label: "x", authIndex: "x1", observedAt: undefined, windows: [{ kind: "5h", usedPercent: 9, resetAt: undefined }] },
+      ],
+    })
   })
 
   test("reports the proxy's error message on a rejected key", async () => {

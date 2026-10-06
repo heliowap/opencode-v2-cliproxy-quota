@@ -5,25 +5,26 @@
 
 Shows the quota of your [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) accounts inside the OpenCode 2 terminal UI.
 
-- The prompt footer shows a short summary for the selected model, such as `5h 42% · wk 18%`.
-- The session sidebar lists every account for that provider, with a usage bar and the time until each window resets.
+- The prompt footer shows how much quota is left for the selected model, such as `5h 58% · wk 82% left`.
+- The session sidebar lists every account for that provider, with a bar of the remaining quota and the time until each window resets.
 - `/quota` refreshes the data now and shows the summary as a toast.
 
-Usage turns yellow at 80% and red at 95%.
+Percentages are the quota left, as in the CLIProxyAPI Management Center. A window turns yellow below 20% left and red below 5% left.
 
 ## Supported providers
 
-CLIProxyAPI records quota windows from upstream responses for three providers:
+| Provider | Windows | Source |
+| --- | --- | --- |
+| Codex | 5 hours and weekly | ChatGPT `wham/usage` |
+| Claude | 5 hours and 7 days | Rate-limit headers that CLIProxyAPI records |
+| Devin | daily and weekly | Codeium `GetUserStatus` |
+| Antigravity | 5 hours and weekly, per model group | Google `retrieveUserQuotaSummary` |
 
-| Provider | Windows |
-| --- | --- |
-| Codex | 5 hours and weekly |
-| Claude | 5 hours and 7 days |
-| Devin | daily and weekly |
+Claude values appear only after CLIProxyAPI has served at least one request with that account. A recorded window whose reset time has passed counts as renewed. Other providers show nothing.
 
-Other providers, such as Antigravity and Gemini, show nothing. CLIProxyAPI only fills these values after it has served at least one request with that account.
+Antigravity splits its quota into a Gemini group and a group for Claude and GPT-OSS models. The plugin shows the group that serves the selected model.
 
-The footer shows the least-used account for each window, because CLIProxyAPI rotates requests to accounts that still have quota.
+The footer shows the account with the most quota left for each window, because CLIProxyAPI rotates requests to accounts that still have quota.
 
 ## Install
 
@@ -33,13 +34,13 @@ Requires OpenCode 2 and a running CLIProxyAPI with a management key (`remote-man
 opencode plugin add github:heliowap/opencode-v2-cliproxy-quota
 ```
 
-Then give the plugin your management key through the environment of the OpenCode process:
+The plugin runs inside the terminal UI, not the background service. Export your management key in the shell where you start `opencode`, for example in `~/.zshrc`:
 
 ```sh
 export CLIPROXY_MANAGEMENT_KEY="your-management-key"
 ```
 
-Restart the service with `opencode service restart` if the footer stays empty.
+Then open a new terminal and start `opencode`. A terminal UI that was already running keeps its old environment.
 
 ## Configure
 
@@ -71,9 +72,23 @@ Pass options with the object form in `opencode.jsonc`. Prefer the environment va
 
 ## How it works
 
-The plugin calls `GET /v8/management/credentials` on CLIProxyAPI and reads each credential's `quota.signals`. CLIProxyAPI fills those signals from the rate-limit headers that Codex and Claude send, and from the Devin account status. The plugin does not call any upstream provider.
+The plugin calls `GET /v8/management/credentials` on CLIProxyAPI to list the accounts.
 
-To pick the provider for the selected model, the plugin strips a `cpa-` prefix from the model ID. It then matches `gpt-`, `codex-`, and `o<digit>` to Codex, `claude-` to Claude, and `devin-` or `swe-` to Devin. A `codex/`, `claude/`, or `devin/` prefix also works.
+For Codex, Devin, and Antigravity, it then asks CLIProxyAPI's `POST /v8/management/requests/api-call` to call the upstream quota endpoint with each account's credential. These are the same requests the CLIProxyAPI Management Center makes, one per account on each refresh. If a request fails, the plugin falls back to the quota signals CLIProxyAPI recorded for that account, if any.
+
+For Claude, it reads the `quota.signals` that CLIProxyAPI records from Claude's rate-limit headers. The plugin queries Codex live because those recorded signals go stale after a manual quota reset.
+
+To pick the provider for the selected model, the plugin strips a `cpa-` prefix from the model ID and matches the rest in this order:
+
+| Model ID | Provider |
+| --- | --- |
+| `ag-claude-`, `ag-gpt-oss`, `gpt-oss` | Antigravity, Claude and GPT group |
+| `ag-`, `gemini-` | Antigravity, Gemini group |
+| `codex-`, `gpt-`, `o<digit>` | Codex |
+| `claude-` | Claude |
+| `devin-`, `swe-` | Devin |
+
+A `codex/`, `claude/`, or `devin/` prefix also works.
 
 ## Development
 
@@ -83,7 +98,7 @@ bun test
 bun run typecheck
 ```
 
-`script/fake-proxy.ts` serves fake Codex and Devin quota data on port 18317 with the key `test-key`, for testing the UI without a real proxy:
+`script/fake-proxy.ts` serves fake recorded quota signals on port 18317 with the key `test-key`, for testing the UI without a real proxy:
 
 ```sh
 bun script/fake-proxy.ts &

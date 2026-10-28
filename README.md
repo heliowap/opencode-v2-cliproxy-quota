@@ -1,3 +1,5 @@
+> **Moved.** This plugin now lives in [heliowap/opencode-plugins](https://github.com/heliowap/opencode-plugins/tree/main/plugins/cliproxy-quota). Install: `opencode plugin add 'github:heliowap/opencode-plugins#main::path:plugins/cliproxy-quota'`. This repository is archived.
+
 # opencode-v2-cliproxy-quota
 
 > [!NOTE]
